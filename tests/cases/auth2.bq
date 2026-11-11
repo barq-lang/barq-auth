@@ -1,0 +1,214 @@
+// Auth part 2: forms, signed URLs, throttling, password resets, email verification, two-factor
+use App\Models\User
+
+Database db = Database.connect("sqlite", #{"path": ":memory:"})
+Model.useConnection(db)
+db.schema().create("users", karo(Blueprint t): void
+    t.id()
+    t.string("name")
+    t.string("email").unique()
+    t.string("password").nullable()
+    t.int("age").nullable()
+    t.bool("active").default(true)
+    t.int("email_verified_at").nullable()
+    t.text("two_factor_secret").nullable()
+    t.text("two_factor_recovery_codes").nullable()
+    t.int("two_factor_confirmed_at").nullable()
+    t.rememberToken()
+    t.timestamps()
+)
+db.schema().create("password_reset_tokens", karo(Blueprint t): void
+    t.string("email").primary()
+    t.string("token")
+    t.int("created_at").nullable()
+)
+Config.set("auth.providers.users.model", User)
+Config.set("app.key", "base64:" + Crypto.base64Encode("0123456789abcdef0123456789abcdef"))
+Config.set("app.url", "https://shop.test")
+Config.set("app.name", "Shop")
+Mail.fake()
+
+User ali = User.create(#{"name": "Ali", "email": "ali@x.test"})
+ali.password = Hash.password("secret")
+ali.save()
+
+// ---- forms: csrf, method spoofing, back(), flash data, old(), the errors bag
+print("== forms")
+Route.group(#{"middleware": #["csrf"]}, karo(): void
+    Route.get("/profile", kr(): Response => view("auth2/form"))
+    Route.put("/profile", karo(Request req): any
+        dict<string, any> data = req.validate(#{"email": "required|email"})
+        return back().with("status", "saved " + data["email"])
+    )
+    Route.get("/status", kr(): string => "status: " + to_str(session("status")) + " token: " + to_str(req_has_token()))
+)
+karo req_has_token(): bool
+    return csrf_token().len() == 40
+Route.post("/plain", kr(Request req): dict<string, any> => req.all())
+
+TestClient c = new TestClient().withCsrfChecks()
+Response page = c.get("/profile")
+string tok = str_between(page.body, 'name="_token" value="', '"')
+print(page.body.contains("name=\"_method\" value=\"PUT\""), tok.len(), page.body.contains("no errors"))
+print(c.post("/profile", #{"email": "x"}, #{"form": true}).status, "(POST to a PUT route)")
+print(c.post("/profile", #{"_method": "PUT", "email": "x"}, #{"form": true}).status, "(no token)")
+print(c.post("/profile", #{"_method": "PUT", "email": "x", "_token": "wrong"}, #{"form": true}).body)
+Response bad = c.post("/profile", #{"_method": "PUT", "_token": tok, "email": "not-an-email"}, #{"form": true})
+print(bad.status, bad.header("Location"))
+string again = c.get("/profile").body
+print(again.contains("value=\"not-an-email\""), again.contains("must be a valid email"), again.contains("1 problem(s)"))
+print(c.get("/profile").body.contains("no errors"), "(flash lasts one request)")
+Response ok = c.post("/profile", #{"email": "a@b.test"}, #{"form": true, "headers": #{"X-CSRF-TOKEN": tok, "X-HTTP-Method-Override": "PUT", "Referer": "/status"}})
+print(ok.status, ok.header("Location"), c.get("/status").body)
+print(new TestClient().post("/plain", #{"a": 1, "_token": "t", "_method": "PATCH"}, #{"form": true}).status)
+print(new TestClient().post("/plain", #{"a": "1", "_token": "t"}, #{"form": true}).json())
+Response j = new TestClient().put("/profile", #{"email": "nope"})
+print(j.status, j.json()["errors"])
+print(csrf_token(), old("email", "none"), View.string('{errors.isEmpty()}'))
+
+// ---- signed URLs
+print("== urls")
+Route.get("/unsubscribe/:id", kr(int id): string => "bye {id}").name("unsubscribe").middleware("signed")
+print(URL.to("/a"), URL.route("unsubscribe", #{"id": 3}), URL.route("unsubscribe", #{"id": 3}, true))
+string signed = URL.signedRoute("unsubscribe", #{"id": 3})
+print(signed.startsWith("https://shop.test/unsubscribe/3?signature="), URL.hasValidSignature(signed))
+string path = signed.replace("https://shop.test", "")
+print(new TestClient().get(path).body, new TestClient().get(path.replace("/3?", "/4?")).status)
+print(new TestClient().get("/unsubscribe/3").body)
+string temp = URL.temporarySignedRoute("unsubscribe", 5, #{"id": 3, "list": "news"})
+print(temp.contains("list=news&expires="), URL.hasValidSignature(temp), URL.hasValidSignature(temp.replace("news", "ads")))
+string later = temp.replace("&expires=", "&expires=9")
+print(URL.hasValidSignature(later), "(expires changed)")
+try
+    URL.sign("/x?expires=1")
+except ValueException as e
+    print("ValueException:", e.message)
+string expiredGood = URL.sign("/unsubscribe/3", 1)
+print(URL.hasValidSignature(expiredGood))
+
+// ---- rate limiting
+print("== throttle")
+print(RateLimiter.hit("k"), RateLimiter.hit("k"), RateLimiter.attempts("k"), RateLimiter.tooManyAttempts("k", 2), RateLimiter.remaining("k", 5))
+print(RateLimiter.availableIn("k") > 50, RateLimiter.attempt("k", 2, kr(): string => "ran"), RateLimiter.attempt("j", 2, kr(): string => "ran"))
+RateLimiter.clear("k")
+print(RateLimiter.attempts("k"))
+Route.get("/limited", kr(): string => "ok").middleware("throttle:2,1")
+TestClient t = new TestClient()
+Response r1 = t.get("/limited")
+print(r1.body, r1.header("X-RateLimit-Remaining"), t.get("/limited").header("X-RateLimit-Remaining"))
+Response r3 = t.get("/limited")
+print(r3.status, r3.body, r3.header("Retry-After") != null)
+
+// ---- password reset
+print("== passwords")
+print(Password.sendResetLink(#{"email": "nobody@x.test"}), Password.message(Password.INVALID_USER))
+print(Password.sendResetLink(#{"email": "ali@x.test"}))
+dict<string, any> mail = Mail.sent()[0]
+print(mail["to"], mail["subject"], mail["text"].contains("https://shop.test/reset-password/"))
+print(Password.sendResetLink(#{"email": "ali@x.test"}), "(again, too soon)")
+string resetToken = ""
+db.table("password_reset_tokens").delete()
+print(Password.sendResetLink(#{"email": "ali@x.test"}, karo(User u, string tk): void
+    resetToken = tk
+    print("custom sender for", u.name)
+))
+print(Password.tokenExists(ali, resetToken), Password.tokenExists(ali, "nope"))
+print(Password.reset(#{"email": "ali@x.test", "token": "nope", "password": "new-pass"}))
+print(Password.reset(#{"email": "ali@x.test", "token": resetToken, "password": "new-pass"}))
+print(Auth.validate(#{"email": "ali@x.test", "password": "new-pass"}), Auth.validate(#{"email": "ali@x.test", "password": "secret"}))
+print(Password.reset(#{"email": "ali@x.test", "token": resetToken, "password": "again"}), "(token used up)")
+string t2 = Password.createToken(ali)
+db.table("password_reset_tokens").update(#{"created_at": Date.now() - 3601})
+print(Password.tokenExists(ali, t2), "(expired)")
+Route.get("/reset-password/:token", kr(string token): string => token).name("password.reset")
+db.table("password_reset_tokens").delete()
+Password.sendResetLink(#{"email": "ali@x.test"})
+print(Mail.sent()[1]["text"].contains("?email=ali%40x.test"))
+
+// ---- email verification
+print("== verification")
+Route.get("/verify-email", kr(): string => "please verify").name("verification.notice")
+Route.get("/verify-email/:id/:hash", karo(int id, string hash): string
+    User u = Auth.user()
+    if u.id != id or not Hash.equals(Hash.sha1(u.email), hash)
+        Http.abort(403)
+    u.markEmailAsVerified()
+    return "verified"
+).name("verification.verify").middleware(#["auth", "signed"])
+Route.get("/dashboard", kr(): string => "dashboard").middleware(#["auth", "verified"])
+print(ali.hasVerifiedEmail())
+ali.sendEmailVerificationNotification()
+string link = Mail.sent()[2]["text"]
+print(Mail.sent()[2]["subject"], link.contains("https://shop.test/verify-email/1/"))
+string vurl = str_before(str_after(link, "https://shop.test"), "\n")
+TestClient v = new TestClient().actingAs(ali)
+Response dash = v.get("/dashboard")
+print(dash.status, dash.header("Location"), v.get("/dashboard", #{"headers": #{"Accept": "application/json"}}).status)
+Event.listen("auth.verified", kr(User u): void => print("event auth.verified", u.name))
+print(v.get(vurl).body, ali.hasVerifiedEmail(), User.find(1).hasVerifiedEmail())
+print(v.get("/dashboard").body, ali.markEmailAsVerified())
+Event.forget("auth.verified")
+
+// ---- two-factor
+print("== two-factor")
+string rfc = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
+print(TwoFactor.code(rfc, 59), TwoFactor.code(rfc, 1111111109), TwoFactor.verifyCode(rfc, "287082", 59), TwoFactor.verifyCode(rfc, "287082", 89), TwoFactor.verifyCode(rfc, "287082", 200))
+print(TwoFactor.generateSecret().len(), TwoFactor.recoveryCodes(3).len(), rx_test('/^[A-Z2-9]{5}-[A-Z2-9]{5}$/', TwoFactor.recoveryCodes()[0]))
+print(TwoFactor.otpauthUrl("ali@x.test", "ABC", "My App"))
+print(Qr.matrix("hello").len(), Qr.svg("hi").startsWith("<svg"), Qr.svg("hi", #{"size": 100}).contains("width=\"100\""))
+print(ali.hasTwoFactorEnabled(), ali.twoFactorQrCodeUrl())
+string secret = ali.enableTwoFactor()
+print(secret.len(), ali.hasTwoFactorEnabled(), ali.twoFactorQrCodeUrl().startsWith("otpauth://totp/Shop:ali%40x.test?secret="))
+print(ali.twoFactorQrCodeSvg().contains("<path"), ali.recoveryCodes())
+print(ali.confirmTwoFactor("000000"), ali.hasTwoFactorEnabled())
+print(ali.confirmTwoFactor(TwoFactor.code(secret)), ali.hasTwoFactorEnabled(), ali.recoveryCodes().len())
+print(ali.verifyTwoFactorCode(TwoFactor.code(secret)), "(same code twice)")
+list<string> codes = ali.recoveryCodes()
+print(ali.verifyRecoveryCode(codes[0].lower()), ali.verifyRecoveryCode(codes[0]), ali.recoveryCodes().len())
+print(ali.regenerateRecoveryCodes().len(), ali.recoveryCodes()[0] != codes[1])
+
+// the login challenge
+print(TwoFactor.attempt(#{"email": "ali@x.test", "password": "wrong"}))
+print(TwoFactor.attempt(#{"email": "ali@x.test", "password": "new-pass"}), Auth.check(), TwoFactor.pending().name, TwoFactor.attemptsLeft())
+print(TwoFactor.complete("111111"), TwoFactor.attemptsLeft(), Auth.check())
+print(TwoFactor.complete(TwoFactor.code(secret, Date.now() + 30)), Auth.check(), TwoFactor.pending())
+Auth.logout()
+TwoFactor.attempt(#{"email": "ali@x.test", "password": "new-pass"})
+print(TwoFactor.complete(ali.recoveryCodes()[0]), Auth.user().name, User.find(1).recoveryCodes().len())
+Auth.logout()
+TwoFactor.attempt(#{"email": "ali@x.test", "password": "new-pass"})
+print(TwoFactor.complete("1"), TwoFactor.complete("2"), TwoFactor.complete("3"), TwoFactor.pending(), "(locked out)")
+User sara = User.create(#{"name": "Sara", "email": "sara@x.test"})
+sara.password = Hash.password("pw")
+sara.save()
+print(TwoFactor.attempt(#{"email": "sara@x.test", "password": "pw"}), Auth.user().name)
+Auth.logout()
+ali.disableTwoFactor()
+print(ali.hasTwoFactorEnabled(), ali.recoveryCodes())
+
+// two-factor over HTTP: the pending login lives in the session
+Route.post("/login", karo(Request req): any
+    string result = TwoFactor.attempt(req.only(#["email", "password"]))
+    return result == "two-factor" ? redirect("/2fa") : Response.text(result)
+)
+Route.post("/2fa", kr(Request req): string => TwoFactor.complete(req.input("code")) ? "in as " + Auth.user().name : "bad code")
+Route.get("/me", kr(): string => Auth.check() ? Auth.user().name : "guest")
+string s2 = ali.enableTwoFactor()
+ali.confirmTwoFactor(TwoFactor.code(s2))
+TestClient h = new TestClient()
+print(h.post("/login", #{"email": "ali@x.test", "password": "new-pass"}, #{"form": true}).header("Location"), h.get("/me").body)
+print(h.post("/2fa", #{"code": "123"}, #{"form": true}).body, h.post("/2fa", #{"code": TwoFactor.code(s2, Date.now() + 30)}, #{"form": true}).body, h.get("/me").body)
+Config.set("auth.2fa.required", true)
+Route.get("/secure", kr(): string => "secure").middleware(#["auth", "two-factor"])
+print(new TestClient().actingAs(sara).get("/secure").status, new TestClient().actingAs(ali).get("/secure").body)
+
+// errors
+try
+    Qr.svg("x".repeat(300))
+except ValueException as e
+    print("ValueException:", e.message)
+Config.set("app.key", null)
+try
+    URL.sign("/x")
+except ValueException as e
+    print("ValueException:", e.message)

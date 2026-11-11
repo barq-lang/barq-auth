@@ -1,0 +1,303 @@
+// Auth part 3: named arguments for built-ins, Http.fake, intended URLs, sessions, OAuth, teams
+use App\Models\User
+use App\Models\Team
+
+Database db = Database.connect("sqlite", #{"path": ":memory:"})
+Model.useConnection(db)
+db.schema().create("users", karo(Blueprint t): void
+    t.id()
+    t.string("name")
+    t.string("email").unique()
+    t.string("password").nullable()
+    t.int("age").nullable()
+    t.bool("active").default(true)
+    t.int("current_team_id").nullable()
+    t.rememberToken()
+    t.timestamps()
+)
+db.schema().create("teams", karo(Blueprint t): void
+    t.id()
+    t.int("user_id")
+    t.string("name")
+    t.timestamps()
+)
+db.schema().create("team_members", karo(Blueprint t): void
+    t.id()
+    t.int("team_id")
+    t.int("user_id")
+    t.string("role").nullable()
+    t.timestamps()
+)
+db.schema().create("team_invitations", karo(Blueprint t): void
+    t.id()
+    t.int("team_id")
+    t.string("email")
+    t.string("role").nullable()
+    t.string("token", 64).unique()
+    t.int("accepted_at").nullable()
+    t.int("expires_at").nullable()
+    t.timestamps()
+)
+db.schema().create("sessions", karo(Blueprint t): void
+    t.string("id").primary()
+    t.int("user_id").nullable()
+    t.string("ip_address", 45).nullable()
+    t.text("user_agent").nullable()
+    t.text("payload")
+    t.int("last_activity")
+)
+Config.set("auth.providers.users.model", User)
+Config.set("auth.teams.model", Team)
+Config.set("app.key", "base64:" + Crypto.base64Encode("0123456789abcdef0123456789abcdef"))
+Config.set("app.url", "https://shop.test")
+Config.set("app.name", "Shop")
+Mail.fake()
+
+karo person(string name, string email): User
+    User u = User.create(#{"name": name, "email": email})
+    u.password = Hash.password("secret")
+    u.save()
+    return u
+
+User ali = person("Ali", "ali@x.test")
+User sara = person("Sara", "sara@x.test")
+User omar = person("Omar", "omar@x.test")
+
+// ---- named arguments now work with built-ins that name their parameters
+print("== named arguments")
+try
+    print(Json.encode(value: 1))
+except TypeException as e
+    print("TypeException:", e.message)
+
+// ---- Http.fake
+print("== http fake")
+Http.fake(#{
+    "api.test/users/*": karo(dict<string, any> r): any
+        return #{"path": r["url"], "method": r["method"], "q": r["query"]}
+    ,
+    "https://api.test/form": kr(dict<string, any> r): any => r["data"],
+    "https://api.test/text": "plain text",
+    "https://api.test/created": Response.json(#{"id": 7}, 201),
+    "https://api.test/gone": 410
+})
+print(Http.get("https://api.test/users/5?full=1").json())
+print(Http.post("https://api.test/form", #{"a": 1, "b": "two"}, #{"form": true}).json())
+print(Http.get("https://api.test/text").body, Http.post("https://api.test/created", #{"x": 1}).status, Http.get("https://api.test/gone").status)
+dict<string, any> last = Http.recorded()[3]
+print(Http.recorded().len(), last["method"], last["data"], last["headers"]["Content-Type"])
+try
+    Http.get("https://elsewhere.test/")
+except HttpException as e
+    print("HttpException:", e.message)
+Http.restore()
+print(Http.recorded())
+
+// ---- intended URLs
+print("== intended")
+Route.get("/login", kr(): string => "login page").name("login")
+Route.post("/login", karo(Request req): any
+    Auth.login(User.find(to_int(req.input("id"))))
+    return intended("/home")
+)
+Route.get("/secret", kr(): string => "secret for " + Auth.user().name).middleware("auth")
+TestClient c = new TestClient()
+Response r = c.get("/secret?tab=2")
+print(r.status, r.header("Location"))
+r = c.post("/login", #{"id": 1})
+print(r.status, r.header("Location"), c.get(r.header("Location")).body)
+r = new TestClient().post("/login", #{"id": 2})
+print(r.header("Location"), "(nothing intended)")
+print(new TestClient().get("/secret", #{"headers": #{"Accept": "application/json"}}).status, URL.intended("/fallback"))
+
+// ---- sessions on several devices
+print("== sessions")
+string chrome = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+string iphone = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+string firefox = "Mozilla/5.0 (X11; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0"
+Route.post("/in", karo(Request req): string
+    Auth.attempt(#{"email": "ali@x.test", "password": "secret"}, req.input("remember") != null)
+    return "in"
+)
+Route.get("/me", kr(): string => Auth.check() ? "logged in" : "guest")
+Route.get("/here", kr(): string => session().browser() + " on " + session().platform() + " mobile=" + to_str(session().isMobile()))
+Route.get("/devices", karo(): list<string>
+    list<string> out = #[]
+    for s in Auth.user().sessions()
+        out.push(s["browser"] + "/" + s["platform"] + (s["current"] ? " (this device)" : "") + " " + to_str(s["ip"]))
+    return list_sort(out)
+)
+Route.get("/ids", kr(): list<string> => list_map(Auth.user().sessions(), kr(dict<string, any> s): string => s["id"]))
+Route.post("/others", kr(Request req): string => to_str(Auth.logoutOtherDevices(to_str(req.input("password")))))
+Route.post("/kill/:id", kr(string id): string => to_str(Auth.logoutSession(id)))
+Route.post("/everywhere", karo(): string
+    Auth.logoutEveryDevice()
+    return "bye"
+)
+TestClient laptop = new TestClient().withHeaders(#{"User-Agent": chrome})
+TestClient phone = new TestClient().withHeaders(#{"User-Agent": iphone})
+TestClient desk = new TestClient().withHeaders(#{"User-Agent": firefox})
+laptop.post("/in", #{})
+phone.post("/in", #{"remember": "1"})
+desk.post("/in", #{})
+print(laptop.get("/here").body, "|", phone.get("/here").body)
+print(laptop.get("/devices").json())
+print(ali.sessions().len(), sara.sessions().len(), "(outside a request)")
+print(laptop.post("/others", #{"password": "wrong"}).body, phone.get("/me").body)
+print(laptop.post("/others", #{"password": "secret"}).body, phone.get("/me").body, desk.get("/me").body, laptop.get("/me").body)
+print(phone.cookies().has("remember_web"), "(phone still has the cookie, but it no longer works)")
+phone.post("/in", #{})
+list<string> ids = phone.get("/ids").json()
+print(ids.len(), laptop.post("/kill/" + ids[0], #{}).body, laptop.post("/kill/nope", #{}).body, phone.get("/me").body)
+desk.post("/in", #{})
+print(laptop.post("/everywhere", #{}).body, laptop.get("/me").body, desk.get("/me").body, ali.sessions().len())
+desk.post("/in", #{})
+print(ali.logoutSessions(), desk.get("/me").body)
+
+Session.config(#{"driver": "database"})
+laptop.post("/in", #{})
+phone.post("/in", #{})
+print(db.table("sessions").whereNotNull("user_id").count(), db.table("sessions").value("user_agent") == chrome)
+print(laptop.get("/devices").json())
+print(laptop.post("/others", #{"password": "secret"}).body, phone.get("/me").body, laptop.get("/me").body, db.table("sessions").count())
+Session.config(#{"driver": "memory"})
+
+// ---- OAuth
+print("== oauth")
+Config.set("auth.oauth", #{
+    "google": #{"client_id": "gid", "client_secret": "gsecret"},
+    "facebook": #{"client_id": "fid", "client_secret": "fsecret"},
+    "github": #{"client_id": "hid", "client_secret": "hsecret"},
+    "acme": #{
+        "client_id": "aid", "client_secret": "asecret",
+        "authorize_url": "https://id.acme.test/authorize", "token_url": "https://id.acme.test/token",
+        "user_url": "https://id.acme.test/me", "scopes": #["profile"],
+        "map": kr(dict<string, any> raw): dict<string, any> => #{"id": raw["uid"], "name": raw["full_name"]}
+    }
+})
+print(OAuth.providers(), OAuth.enabled("google"), OAuth.enabled("twitter"))
+Route.get("/auth/:provider", kr(string provider): Response => OAuth.driver(provider).redirect())
+Route.get("/auth/:provider/callback", karo(string provider): string
+    try
+        OAuthUser u = OAuth.driver(provider).user()
+        return "{u.provider} {u.id} {u.name} {u.email} verified={u.emailVerified} avatar={u.avatar} token={u.token} nick={u.nickname} scopes={u.scopes}"
+    except OAuthException as e
+        return "error " + e.error + ": " + e.message
+)
+Http.fake(#{
+    "https://oauth2.googleapis.com/token": karo(dict<string, any> r): any
+        if r["data"]["code"] != "good" or r["data"]["code_verifier"] == null
+            return Response.json(#{"error": "invalid_grant", "error_description": "Bad Request"}, 400)
+        return #{"access_token": "g-token", "expires_in": 3599, "scope": "openid email profile", "token_type": "Bearer"}
+    ,
+    "https://openidconnect.googleapis.com/v1/userinfo": kr(dict<string, any> r): any => #{"sub": "1077", "name": "Ali Khan", "email": "ali@gmail.test", "email_verified": true, "picture": "https://img.test/a.png", "auth": r["headers"]["Authorization"]},
+    "https://graph.facebook.com/v19.0/oauth/access_token": #{"access_token": "f-token", "expires_in": 5000},
+    "https://graph.facebook.com/v19.0/me": kr(dict<string, any> r): any => #{"id": "55", "name": "Sara FB", "email": "sara@fb.test", "picture": #{"data": #{"url": "https://fb.test/p.jpg"}}, "proof": r["query"]["appsecret_proof"]},
+    "https://github.com/login/oauth/access_token": #{"access_token": "h-token", "scope": "read:user,user:email"},
+    "https://api.github.com/user": #{"id": 99, "login": "omar-dev", "name": null, "email": null, "avatar_url": "https://gh.test/o.png"},
+    "https://api.github.com/user/emails": #[#{"email": "old@x.test", "primary": false, "verified": true}, #{"email": "omar@gh.test", "primary": true, "verified": true}],
+    "https://id.acme.test/token": #{"access_token": "a-token"},
+    "https://id.acme.test/me": #{"uid": 5, "full_name": "Acme Person", "email": "p@acme.test"}
+})
+karo state_of(string url): string
+    return str_before(str_after(url, "state=") + "&", "&")
+TestClient browser = new TestClient()
+string loc = browser.get("/auth/google").header("Location")
+string state = state_of(loc)
+print(str_before(loc, "?"), loc.contains("client_id=gid"), loc.contains("scope=openid+email+profile"), loc.contains("code_challenge_method=S256"))
+print(loc.contains("redirect_uri=https%3A%2F%2Fshop.test%2Fauth%2Fgoogle%2Fcallback"), state.len() > 30)
+print(browser.get("/auth/google/callback?code=good&state=" + state).body)
+print(browser.get("/auth/google/callback?code=good&state=" + state).body)
+browser.get("/auth/google")
+print(browser.get("/auth/google/callback?code=good&state=forged").body)
+loc = browser.get("/auth/google").header("Location")
+print(browser.get("/auth/google/callback?code=bad&state=" + state_of(loc)).body)
+print(browser.get("/auth/google/callback?error=access_denied&error_description=The+user+said+no").body)
+loc = browser.get("/auth/facebook").header("Location")
+print(str_before(loc, "?"), loc.contains("scope=email%2Cpublic_profile"), loc.contains("code_challenge"))
+print(browser.get("/auth/facebook/callback?code=x&state=" + state_of(loc)).body)
+dict<string, any> fbToken = list_find(Http.recorded(), kr(dict<string, any> x): bool => x["url"].contains("access_token?"))
+print(fbToken["method"], fbToken["query"]["client_secret"], fbToken["query"]["code"])
+loc = browser.get("/auth/github").header("Location")
+print(browser.get("/auth/github/callback?code=x&state=" + state_of(loc)).body)
+loc = browser.get("/auth/acme").header("Location")
+print(str_before(loc, "&"), browser.get("/auth/acme/callback?code=x&state=" + state_of(loc)).body)
+print(GoogleProvider.scopes(#["https://www.googleapis.com/auth/calendar"]).with(#{"prompt": "consent"}).url().contains("profile+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcalendar&state="))
+print(GoogleProvider.setScopes(#["email"]).stateless().url().contains("state="), GoogleProvider.redirectUrl("/other").url().contains("shop.test%2Fother"))
+print(FacebookProvider.userFromToken("f-token").name, GithubProvider.name())
+try
+    OAuth.driver("twitter")
+except OAuthException as e
+    print("OAuthException:", str_before(e.message, ";"))
+Config.set("auth.oauth.google.client_id", null)
+try
+    GoogleProvider.redirect()
+except OAuthException as e
+    print("OAuthException:", e.message)
+try
+    GoogleProvider.user()
+except OAuthException as e
+    print("OAuthException:", str_before(e.message, ":"))
+OAuth.fake("google", #{"id": "g-7", "name": "Fake Person", "email": "fake@x.test"})
+Response fr = browser.get("/auth/google")
+print(fr.header("Location"), browser.get(str_after(fr.header("Location"), "https://shop.test")).body)
+OAuth.restore()
+Http.restore()
+
+// ---- teams
+print("== teams")
+Event.listen("teams.memberAdded", karo(dict<string, any> e): void
+    print("  event: added", e["user"].name, "as", e["role"], "to", e["team"].name)
+)
+Team acme = Team.create(#{"name": "Acme", "user_id": ali.id})
+acme.addMember(sara, role: "admin")
+acme.addMember(omar)
+karo names(list<User> users): string
+    return list_map(users, kr(User u): string => u.name).join(", ")
+print(names(acme.members()), "|", names(acme.membersWithRole("admin")), "|", names(acme.membersWithRole("owner")), "|", acme.owner().name)
+print(acme.roleOf(ali), acme.roleOf(sara), acme.roleOf(omar), ali.teamRole(acme), acme.hasMember(omar))
+print(ali.hasTeamRole(acme, "admin"), sara.hasTeamRole(acme, "admin"), omar.hasTeamRole(acme, "admin"), omar.hasTeamRole(acme, #["admin", "member"]))
+print(ali.ownsTeam(acme), sara.ownsTeam(acme), sara.belongsToTeam(acme))
+for bad in #[kr(): void => acme.addMember(ali), kr(): void => acme.addMember(sara), kr(): void => acme.addMember(omar, "boss"), kr(): void => acme.updateMemberRole(sara, "owner"), kr(): void => acme.removeMember(ali)]
+    try
+        bad()
+    except ValueException as e
+        print("ValueException:", e.message)
+try
+    acme.addMember(sara, rank: "admin")
+except TypeException as e
+    print("TypeException:", e.message)
+acme.updateMemberRole(omar, "admin")
+print(names(acme.membersWithRole("admin")))
+Team beta = Team.create(#{"name": "Beta", "user_id": sara.id})
+print(list_map(sara.teams(), kr(Team t): string => t.name), list_map(sara.ownedTeams(), kr(Team t): string => t.name), ali.teams().len())
+print(sara.currentTeam().name, sara.current_team_id == acme.id, sara.switchTeam(beta), sara.currentTeam().name, omar.switchTeam(beta))
+
+print("-- invitations")
+dict<string, any> inv = acme.invite("zara@x.test", role: "member")
+print(inv["email"], inv["role"], inv["url"], inv["token"].len(), Mail.sent().len(), "(no accept route: no email)")
+Route.get("/team-invitations/:token", kr(string token): string => "accept").name("team-invitations.accept")
+inv = acme.invite("zara@x.test", role: "admin")
+dict<string, any> mail = Mail.sent()[0]
+print(mail["to"], mail["subject"], inv["url"].startsWith("https://shop.test/team-invitations/"), mail["text"].contains(inv["url"]))
+print(acme.invitations().len(), acme.invitations()[0]["role"], acme.invitations()[0].has("token"))
+dict<string, any> quiet = acme.invite("quiet@x.test", send: false)
+print(quiet["role"], Mail.sent().len(), acme.cancelInvitation("quiet@x.test"), acme.cancelInvitation("quiet@x.test"))
+print(Team.findInvitation(inv["token"])["team"].name, Team.findInvitation("nope"))
+User zara = person("Zara", "zara@x.test")
+print(Team.acceptInvitation(inv["token"], omar), "(someone else's invitation)")
+print(Team.acceptInvitation(inv["token"], zara), acme.roleOf(zara), Team.acceptInvitation(inv["token"], zara), acme.invitations().len())
+try
+    acme.invite("sara@x.test")
+except ValueException as e
+    print("ValueException:", e.message)
+
+print("-- ownership and leaving")
+acme.transferOwnership(sara)
+print(acme.owner().name, acme.roleOf(ali), names(acme.members()))
+omar.switchTeam(acme)
+print(acme.removeMember(omar), acme.removeMember(omar), User.find(omar.id).current_team_id, omar.belongsToTeam(acme))
+sara.switchTeam(beta)
+beta.purge()
+print(Team.count(), User.find(sara.id).current_team_id, User.find(sara.id).currentTeam().name)
+print(ali.getAttribute("email"), ali.setAttribute("age", 30), ali.age)

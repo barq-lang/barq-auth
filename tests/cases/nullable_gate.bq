@@ -1,0 +1,9 @@
+// Guests reach Gate checks whose user parameter is nullable (moved from barq's language3.bq).
+
+class Member
+    public string name
+
+// guests reach Gate checks whose user parameter is nullable
+Gate.define("read-news", kr(?Member u): bool => u == null)
+Gate.define("post-news", kr(Member u): bool => true)
+print(Gate.allows("read-news"), Gate.allows("post-news"))

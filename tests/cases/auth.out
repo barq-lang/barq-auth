@@ -1,0 +1,61 @@
+== auth
+false true null null
+false
+false
+true
+true 1 Ali ali@x.test web
+true Ali
+false
+Sara 2
+null
+TypeException: Auth.login() needs a User model, got string
+AuthException: Auth.login(): save the User before logging it in
+ValueException: Auth.attempt() needs a "password" key (and one or more columns to find the user by)
+AuthException: unknown auth guard "admin" (guards: web, api) — add it to config/auth.bq under "guards"
+event auth.failed
+event auth.login
+event auth.logout
+== tokens
+cli #["*"] #["posts:read"] true true
+2 0
+false null
+reader App\Models\User true
+== gate
+true false #["see-dashboard", "view-welcome"]
+false true (guest)
+true false false
+false false true
+true true true
+AuthorizationException: This action is unauthorized. 403
+true false true
+true false true
+true false false
+false Locked posts cannot be deleted.
+#{"allowed": true, "message": null}
+true null
+AuthorizationException: Locked posts cannot be deleted.
+true
+true false
+TypeException: the "bad" ability must return bool (or null to let the next check decide), got int
+== http
+302 /login
+401 #{"message": "Unauthenticated."}
+401 bad login
+302 /home
+home of Ali
+guest middleware: 302 /
+200 updated Hello 403 404
+created
+302 false
+true
+home of Ali
+false
+302 (old cookie after logout)
+302
+302
+#{"name": "Ali", "can_read": true}
+#{"name": "Ali", "can_read": true}
+302
+true
+302 1
+home of Sara updated secret 403

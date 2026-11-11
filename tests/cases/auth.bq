@@ -1,0 +1,195 @@
+// Framework part 3: authentication, API tokens, Gate and policies
+use App\Models\User
+use App\Models\Post
+
+Database db = Database.connect("sqlite", #{"path": ":memory:"})
+Model.useConnection(db)
+Schema schema = db.schema()
+schema.create("users", karo(Blueprint t): void
+    t.id()
+    t.string("name")
+    t.string("email").unique()
+    t.string("password").nullable()
+    t.int("age").nullable()
+    t.bool("active").default(true)
+    t.rememberToken()
+    t.timestamps()
+)
+schema.create("posts", karo(Blueprint t): void
+    t.id()
+    t.int("user_id")
+    t.string("title")
+    t.text("meta").nullable()
+    t.timestamps()
+)
+schema.create("personal_access_tokens", karo(Blueprint t): void
+    t.id()
+    t.morphs("tokenable")
+    t.string("name")
+    t.string("token", 64).unique()
+    t.text("abilities").nullable()
+    t.int("last_used_at").nullable()
+    t.int("expires_at").nullable()
+    t.timestamps()
+)
+
+Config.set("auth.providers.users.model", User)
+User ali = User.create(#{"name": "Ali", "email": "ali@x.test", "age": 30})
+ali.password = Hash.password("secret")
+ali.save()
+User sara = User.create(#{"name": "Sara", "email": "sara@x.test", "age": 16})
+sara.password = Hash.password("hunter2")
+sara.save()
+User boss = User.create(#{"name": "Boss", "email": "admin@x.test", "age": 50})
+
+// ---- Auth outside a request: the guard remembers the user in memory
+print("== auth")
+print(Auth.check(), Auth.guest(), Auth.id(), Auth.user())
+print(Auth.attempt(#{"email": "ali@x.test", "password": "wrong"}))
+print(Auth.attempt(#{"email": "nobody@x.test", "password": "secret"}))
+print(Auth.attempt(#{"email": "ali@x.test", "password": "secret"}))
+print(Auth.check(), Auth.id(), Auth.user().name, auth().user().email, Auth.guard().name())
+print(Auth.validate(#{"email": "sara@x.test", "password": "hunter2"}), Auth.user().name)
+Auth.logout()
+print(Auth.check())
+print(Auth.loginById(2).name, Auth.id())
+print(Auth.loginById(99))
+Auth.logout()
+try
+    Auth.login("ali")
+except TypeException as e
+    print("TypeException:", e.message)
+try
+    User ghost = new User(#{"name": "Ghost", "email": "g@x.test"})
+    Auth.login(ghost)
+except AuthException as e
+    print("AuthException:", e.message)
+try
+    Auth.attempt(#{"email": "ali@x.test"})
+except ValueException as e
+    print("ValueException:", e.message)
+try
+    auth("admin")
+except AuthException as e
+    print("AuthException:", e.message)
+
+// ---- events
+Event.listen("auth.*", karo(string name, any user): void
+    print("event", name)
+)
+Auth.attempt(#{"email": "ali@x.test", "password": "nope"})
+Auth.attempt(#{"email": "ali@x.test", "password": "secret"})
+Auth.logout()
+Event.forget("auth.*")
+
+// ---- API tokens
+print("== tokens")
+NewAccessToken t1 = ali.createToken("cli")
+NewAccessToken t2 = ali.createToken("reader", #["posts:read"])
+print(t1.name, t1.abilities, t2.abilities, t1.plainTextToken.startsWith("1|"), t2.plainTextToken.len() > 30)
+print(ali.tokens().count(), sara.tokens().count())
+print(ali.tokenCan("posts:read"), ali.currentAccessToken())
+dict<string, any> row = ali.tokens().where("name", "reader").first()
+print(row["name"], row["tokenable_type"], row["token"] != t2.plainTextToken)
+
+// ---- Gate abilities
+print("== gate")
+Gate.define("see-dashboard", kr(User u): bool => u.age >= 18)
+Gate.define("view-welcome", kr(any u): bool => true)
+print(Gate.has("see-dashboard"), Gate.has("fly"), Gate.abilities())
+print(Gate.allows("see-dashboard"), Gate.allows("view-welcome"), "(guest)")
+Auth.login(ali)
+print(Gate.allows("see-dashboard"), Gate.denies("see-dashboard"), Gate.allows("fly"))
+print(Gate.forUser(sara).allows("see-dashboard"), sara.can("see-dashboard"), sara.cannot("see-dashboard"))
+print(Gate.check(#["see-dashboard", "view-welcome"]), Gate.any(#["fly", "view-welcome"]), Gate.none(#["fly"]))
+try
+    Gate.forUser(sara).authorize("see-dashboard")
+except AuthorizationException as e
+    print("AuthorizationException:", e.message, e.status)
+
+// ---- policies (App\Policies\PostPolicy is found automatically)
+Post mine = Post.create(#{"user_id": ali.id, "title": "Hello"})
+Post theirs = Post.create(#{"user_id": sara.id, "title": "secret"})
+Post locked = Post.create(#{"user_id": ali.id, "title": "locked"})
+print(ali.can("update", mine), ali.can("update", theirs), sara.can("update", theirs))
+print(ali.can("create", Post), sara.can("create", Post), boss.can("update", theirs))
+print(Gate.forUser(null).allows("view", mine), Gate.forUser(null).allows("view", theirs), Gate.forUser(null).allows("update", mine))
+dict<string, any> res = Gate.inspect("delete", locked)
+print(res["allowed"], res["message"])
+print(Gate.inspect("delete", mine))
+print(Gate.getPolicyFor(mine) != null, Gate.getPolicyFor(ali))
+try
+    Gate.authorize("delete", locked)
+except AuthorizationException as e
+    print("AuthorizationException:", e.message)
+Gate.before(karo(User u, string ability): any
+    if u.name == "Sara" and ability == "update"
+        return true
+    return null
+)
+print(sara.can("update", mine))
+Gate.after(kr(User u, string ability, any result): any => result ?? (ability == "wave"))
+print(ali.can("wave"), ali.can("dance"))
+Gate.define("bad", kr(User u): int => 1)
+try
+    ali.can("bad")
+except TypeException as e
+    print("TypeException:", e.message)
+Auth.logout()
+
+// ---- HTTP: session guard, remember me, token guard, middleware
+print("== http")
+Route.post("/login", karo(Request req): any
+    bool ok = Auth.attempt(#{"email": req.input("email"), "password": req.input("password")}, req.input("remember") == "yes")
+    return ok ? Response.redirect("/home") : Response.text("bad login", 401)
+).middleware("guest")
+Route.get("/login", kr(): string => "login form").name("login")
+Route.get("/home", kr(Request req): string => "home of " + req.user().name).middleware("auth")
+Route.post("/logout", karo(): any
+    Auth.logout()
+    return Response.redirect("/")
+)
+Route.get("/api/me", kr(Request req): dict<string, any> => #{"name": Auth.user().name, "can_read": Auth.user().tokenCan("posts:read")}).middleware("auth:api")
+Route.put("/posts/:post", kr(Post post): string => "updated " + post.title).middleware(#["auth", "can:update,post"])
+Route.post("/posts", kr(): string => "created").middleware(#["auth", "can:create,Post"])
+
+TestClient c = new TestClient()
+Response r = c.get("/home")
+print(r.status, r.header("Location"))
+r = c.get("/home", #{"headers": #{"Accept": "application/json"}})
+print(r.status, r.json())
+r = c.post("/login", #{"email": "ali@x.test", "password": "bad"}, #{"form": true})
+print(r.status, r.body)
+r = c.post("/login", #{"email": "ali@x.test", "password": "secret"}, #{"form": true})
+print(r.status, r.header("Location"))
+print(c.get("/home").body)
+r = c.post("/login", #{"email": "ali@x.test", "password": "secret"}, #{"form": true})
+print("guest middleware:", r.status, r.header("Location"))
+print(c.put("/posts/1").status, c.put("/posts/1").body, c.put("/posts/2").status, c.put("/posts/99").status)
+print(c.post("/posts").body)
+c.post("/logout")
+print(c.get("/home").status, c.cookies().has("remember_web"))
+
+// remember me: a new session still knows the user through the cookie
+r = c.post("/login", #{"email": "ali@x.test", "password": "secret", "remember": "yes"}, #{"form": true})
+print(c.cookies().has("remember_web"))
+string remembered = c.cookies()["remember_web"]
+print(new TestClient().get("/home", #{"cookies": #{"remember_web": remembered}}).body)
+c.post("/logout")
+print(c.cookies().has("remember_web"))
+print(new TestClient().get("/home", #{"cookies": #{"remember_web": remembered}}).status, "(old cookie after logout)")
+print(new TestClient().get("/home", #{"cookies": #{"remember_web": "1|forged"}}).status)
+
+// token guard
+TestClient api = new TestClient()
+print(api.get("/api/me").status)
+print(api.withToken(t2.plainTextToken).get("/api/me").json())
+print(new TestClient().withToken(t1.plainTextToken).get("/api/me").json())
+print(new TestClient().withToken("1|not-the-secret").get("/api/me").status)
+print(ali.tokens().where("name", "reader").value("last_used_at") != null)
+ali.tokens().where("name", "reader").delete()
+print(new TestClient().withToken(t2.plainTextToken).get("/api/me").status, ali.tokens().count())
+
+// actingAs
+TestClient acting = new TestClient().actingAs(sara)
+print(acting.get("/home").body, acting.put("/posts/2").body, acting.post("/posts").status)

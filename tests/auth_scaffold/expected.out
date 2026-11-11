@@ -1,0 +1,39 @@
+register page 200
+bad confirmation 302 /register true
+no token 419
+registered 302 /dashboard 1
+unverified dashboard 302 /verify-email true
+verify link 302 /dashboard?verified=1
+dashboard true
+tampered link 403
+2fa page true
+setup page /settings/2fa true true
+wrong confirm true
+confirmed /settings/2fa true true 8
+logout 302 / /login
+bad password /login true
+password ok /2fa 302
+bad code /2fa true
+good code /dashboard true
+reset link sent /forgot-password true
+reset page true
+reset /login true
+new password works true
+login offers google true 404
+google login /dashboard true g-42 https://img.test/s.png true
+forged state /login true
+team created /teams/1 true true
+invited /teams/1 true true
+invite a member true
+bad role true
+invitation as a guest /login
+after 2fa true
+joined true true true
+stranger cannot see it /login true
+role changed true
+members cannot change roles 403
+left /teams true 403
+devices 200 true true
+wrong password true
+others logged out true /login 200
+

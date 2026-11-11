@@ -1,0 +1,75 @@
+== forms
+true 40 true
+405 (POST to a PUT route)
+419 (no token)
+CSRF token mismatch.
+302 /profile
+true true true
+true (flash lasts one request)
+302 /status status: saved a@b.test token: true
+405
+#{"a": "1"}
+422 #{"email": #["The email field must be a valid email address."]}
+ none true
+== urls
+https://shop.test/a /unsubscribe/3 https://shop.test/unsubscribe/3
+true true
+bye 3 403
+Invalid signature.
+true true false
+false (expires changed)
+ValueException: URL.sign(): "signature" and "expires" are reserved query parameters
+true
+== throttle
+1 2 2 true 3
+true false ran
+0
+ok 1 0
+429 Too Many Attempts. true
+== passwords
+passwords.user We can't find a user with that email address.
+passwords.sent
+#["ali@x.test"] Shop: reset your password true
+passwords.throttled (again, too soon)
+custom sender for Ali
+passwords.sent
+true false
+passwords.token
+passwords.reset
+true false
+passwords.token (token used up)
+false (expired)
+true
+== verification
+false
+Shop: verify your email address true
+302 /verify-email 403
+event auth.verified Ali
+verified true true
+dashboard false
+== two-factor
+287082 081804 true true false
+32 3 true
+otpauth://totp/My%20App:ali%40x.test?secret=ABC&issuer=My+App&algorithm=SHA1&digits=6&period=30
+21 true true
+false null
+32 false true
+true #[]
+false false
+true true 8
+false (same code twice)
+true false 7
+8 true
+failed
+two-factor false Ali 3
+false 2 false
+true true null
+true Ali 7
+false false false null (locked out)
+login Sara
+false #[]
+/2fa guest
+bad code in as Ali Ali
+403 secure
+ValueException: Qr.svg(): the text is too long for a QR code here (300 bytes; the limit is 213)
+ValueException: signed URLs need an app key: run "barq key:generate" (it writes APP_KEY to .env), or set config app.key

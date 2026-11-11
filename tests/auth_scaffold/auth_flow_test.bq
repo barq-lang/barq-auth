@@ -1,0 +1,126 @@
+use App\Models\User
+
+Mail.fake()
+TestClient c = new TestClient().withCsrfChecks()
+
+karo token(TestClient client, string path): string
+    return str_between(client.get(path).body, 'name="_token" value="', '"')
+
+karo form(TestClient client, string page, string action, dict<string, any> data): Response
+    dict<string, any> body = dict_merge(data, #{"_token": token(client, page)})
+    return client.post(action, body, #{"form": true, "headers": #{"Referer": page}})
+
+// register
+print("register page", c.get("/register").status)
+Response r = form(c, "/register", "/register", #{"name": "Ali", "email": "ali@x.test", "password": "secret123", "password_confirmation": "nope"})
+print("bad confirmation", r.status, r.header("Location"), c.get("/register").body.contains("confirmation does not match"))
+print("no token", c.post("/register", #{"name": "Ali"}, #{"form": true}).status)
+r = form(c, "/register", "/register", #{"name": "Ali", "email": "ali@x.test", "password": "secret123", "password_confirmation": "secret123"})
+print("registered", r.status, r.header("Location"), User.count())
+r = c.get("/dashboard")
+print("unverified dashboard", r.status, r.header("Location"), c.get("/verify-email").body.contains("ali@x.test"))
+string mail = Mail.sent()[0]["text"]
+string link = str_before(str_after(mail, "http://localhost:8000"), "\n")
+r = c.get(link)
+print("verify link", r.status, r.header("Location"))
+print("dashboard", c.get("/dashboard").body.contains("Hello, Ali"))
+print("tampered link", c.get(link.replace("signature=", "signature=0")).status)
+
+// two-factor setup
+print("2fa page", c.get("/settings/2fa").body.contains("Turn on"))
+r = form(c, "/settings/2fa", "/settings/2fa/enable", #{})
+string setup = c.get("/settings/2fa").body
+print("setup page", r.header("Location"), setup.contains("<svg"), setup.contains("Scan this QR code"))
+User ali = User.first()
+r = form(c, "/settings/2fa", "/settings/2fa/confirm", #{"code": "000000"})
+print("wrong confirm", c.get("/settings/2fa").body.contains("That code is not valid"))
+r = form(c, "/settings/2fa", "/settings/2fa/confirm", #{"code": TwoFactor.code(ali.twoFactorSecret())})
+string on = c.get("/settings/2fa").body
+print("confirmed", r.header("Location"), on.contains("is <strong>on</strong>"), on.contains("Save your recovery codes"), User.first().recoveryCodes().len())
+
+// log out, log in with a code
+r = form(c, "/dashboard", "/logout", #{})
+print("logout", r.status, r.header("Location"), c.get("/dashboard").header("Location"))
+r = form(c, "/login", "/login", #{"email": "ali@x.test", "password": "wrong"})
+print("bad password", r.header("Location"), c.get("/login").body.contains("do not match our records"))
+r = form(c, "/login", "/login", #{"email": "ali@x.test", "password": "secret123"})
+print("password ok", r.header("Location"), c.get("/dashboard").status)
+r = form(c, "/2fa", "/2fa", #{"code": "123456"})
+print("bad code", r.header("Location"), c.get("/2fa").body.contains("That code is not valid"))
+r = form(c, "/2fa", "/2fa", #{"code": TwoFactor.code(ali.twoFactorSecret(), Date.now() + 30)})
+print("good code", r.header("Location"), c.get("/dashboard").body.contains("Hello, Ali"))
+
+// forgotten password
+form(c, "/dashboard", "/logout", #{})
+r = form(c, "/forgot-password", "/forgot-password", #{"email": "ali@x.test"})
+print("reset link sent", r.header("Location"), c.get("/forgot-password").body.contains("emailed your password reset link"))
+string resetLink = str_before(str_after(Mail.sent()[1]["text"], "http://localhost:8000"), "\n")
+string resetPage = c.get(resetLink).body
+print("reset page", resetPage.contains("value=\"ali@x.test\""))
+string tok = str_between(resetPage, 'name="token" value="', '"')
+r = form(c, resetLink, "/reset-password", #{"token": tok, "email": "ali@x.test", "password": "brand-new-1", "password_confirmation": "brand-new-1"})
+print("reset", r.header("Location"), c.get("/login").body.contains("Your password has been reset"))
+print("new password works", Auth.validate(#{"email": "ali@x.test", "password": "brand-new-1"}))
+
+// social login: Http.fake answers for Google
+karo state_of(string url): string
+    return str_before(str_after(url, "state=") + "&", "&")
+Config.set("auth.oauth.google", #{"client_id": "gid", "client_secret": "gsecret"})
+Http.fake(#{
+    "https://oauth2.googleapis.com/token": #{"access_token": "tok", "expires_in": 3600},
+    "https://openidconnect.googleapis.com/v1/userinfo": #{"sub": "g-42", "name": "Sara", "email": "sara@x.test", "email_verified": true, "picture": "https://img.test/s.png"}
+})
+TestClient s = new TestClient().withCsrfChecks()
+print("login offers google", s.get("/login").body.contains("Continue with Google"), s.get("/auth/twitter").status)
+string loc = s.get("/auth/google").header("Location")
+r = s.get("/auth/google/callback?code=abc&state=" + state_of(loc))
+User sara = User.where("email", "sara@x.test").first()
+print("google login", r.header("Location"), s.get("/dashboard").body.contains("Hello, Sara"), sara.google_id, sara.avatar, sara.hasVerifiedEmail())
+TestClient stranger = new TestClient()
+r = stranger.get("/auth/google/callback?code=abc&state=forged")
+print("forged state", r.header("Location"), stranger.get("/login").body.contains("Logging in with Google did not work"))
+
+// teams: Sara creates one and invites Ali
+r = form(s, "/teams/create", "/teams", #{"name": "Acme"})
+string team = r.header("Location")
+print("team created", team, s.get("/teams").body.contains("Acme"), s.get("/dashboard").body.contains("Current team: <strong>Acme</strong>"))
+r = form(s, team, team + "/members", #{"email": "ali@x.test", "role": "admin"})
+string manage = s.get(team).body
+print("invited", r.header("Location"), manage.contains("Invitation sent to ali@x.test"), manage.contains("Waiting for an answer"))
+form(s, team, team + "/members", #{"email": "sara@x.test", "role": "member"})
+print("invite a member", s.get(team).body.contains("on this team already"))
+form(s, team, team + "/members", #{"email": "x@x.test", "role": "boss"})
+print("bad role", s.get(team).body.contains("selected role is invalid"))
+list<dict<string, any>> sent = Mail.sent()
+string invite = str_before(str_after(sent[sent.len() - 1]["text"], "http://localhost:8000"), "\n")
+
+// Ali opens the link while logged out: log in (2FA with a recovery code), then straight back to the invitation
+r = c.get(invite)
+print("invitation as a guest", r.header("Location"))
+r = form(c, "/login", "/login", #{"email": "ali@x.test", "password": "brand-new-1"})
+r = form(c, "/2fa", "/2fa", #{"code": User.where("email", "ali@x.test").first().recoveryCodes()[0]})
+print("after 2fa", r.header("Location") == invite)
+r = c.get(invite)
+string page = c.get(team).body
+print("joined", r.header("Location") == team, page.contains("Welcome to Acme!"), page.contains("You are admin"))
+print("stranger cannot see it", stranger.get(team).header("Location"), c.get("/teams").body.contains("<span class=\"badge\">current</span>"))
+
+// roles and leaving
+string aliId = to_str(User.where("email", "ali@x.test").first().id)
+form(s, team, team + "/members/" + aliId, #{"_method": "PUT", "role": "member"})
+print("role changed", s.get(team).body.contains("Ali is now member"))
+r = form(c, team, team + "/members/" + aliId, #{"_method": "PUT", "role": "admin"})
+print("members cannot change roles", r.status)
+r = form(c, team, team + "/members/" + aliId, #{"_method": "DELETE"})
+print("left", r.header("Location"), c.get("/teams").body.contains("You left Acme"), c.get(team).status)
+
+// devices: Ali logs in on a phone, then logs it out from the first browser
+TestClient phone = new TestClient().withCsrfChecks().withHeaders(#{"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1"})
+form(phone, "/login", "/login", #{"email": "ali@x.test", "password": "brand-new-1"})
+form(phone, "/2fa", "/2fa", #{"code": User.where("email", "ali@x.test").first().recoveryCodes()[0]})
+string devices = c.get("/settings/sessions").body
+print("devices", phone.get("/dashboard").status, devices.contains("Safari on iOS (phone)"), devices.contains("this device"))
+form(c, "/settings/sessions", "/settings/sessions", #{"_method": "DELETE", "password": "wrong"})
+print("wrong password", c.get("/settings/sessions").body.contains("The password is incorrect"))
+form(c, "/settings/sessions", "/settings/sessions", #{"_method": "DELETE", "password": "brand-new-1"})
+print("others logged out", c.get("/settings/sessions").body.contains("logged out on your other devices"), phone.get("/dashboard").header("Location"), c.get("/dashboard").status)

@@ -1,0 +1,80 @@
+== named arguments
+TypeException: Json.encode() is built in and takes positional arguments only — named arguments work with functions written in Barq
+== http fake
+#{"path": "https://api.test/users/5?full=1", "method": "GET", "q": #{"full": "1"}}
+#{"a": "1", "b": "two"}
+plain text 201 410
+5 POST #{"x": 1} application/json
+HttpException: Http.get(): Http.fake() has no response for GET https://elsewhere.test/ (add its URL, a pattern like "api.example.com/*", or "*")
+#[]
+== intended
+302 /login
+302 /secret?tab=2 secret for Ali
+/home (nothing intended)
+401 /fallback
+== sessions
+Chrome on Windows mobile=false | Safari on iOS mobile=true
+#["Chrome/Windows (this device) 127.0.0.1", "Firefox/Linux 127.0.0.1", "Safari/iOS 127.0.0.1", "Unknown/Unknown 127.0.0.1"]
+4 1 (outside a request)
+false logged in
+true guest guest logged in
+true (phone still has the cookie, but it no longer works)
+2 true false guest
+bye guest guest 0
+1 guest
+2 true
+#["Chrome/Windows (this device) 127.0.0.1", "Safari/iOS 127.0.0.1"]
+true guest logged in 2
+== oauth
+#["acme", "facebook", "github", "google"] true false
+https://accounts.google.com/o/oauth2/v2/auth true true true
+true true
+google 1077 Ali Khan ali@gmail.test verified=true avatar=https://img.test/a.png token=g-token nick=null scopes=#["openid", "email", "profile"]
+error invalid_state: google: the login state does not match — start again from the login page (the link was used twice, or opened in another browser)
+error invalid_state: google: the login state does not match — start again from the login page (the link was used twice, or opened in another browser)
+error invalid_grant: google did not accept the login code: Bad Request
+error access_denied: google: The user said no
+https://www.facebook.com/v19.0/dialog/oauth true false
+facebook 55 Sara FB sara@fb.test verified=false avatar=https://fb.test/p.jpg token=f-token nick=null scopes=#[]
+GET fsecret x
+github 99 omar-dev omar@gh.test verified=true avatar=https://gh.test/o.png token=h-token nick=omar-dev scopes=#["read:user", "user:email"]
+https://id.acme.test/authorize?client_id=aid acme 5 Acme Person p@acme.test verified=false avatar=null token=a-token nick=null scopes=#[]
+true
+false true
+Sara FB github
+OAuthException: OAuth.driver(): unknown OAuth provider "twitter" (built in: google, facebook, github
+OAuthException: OAuth.redirect(): no client id for "google" — set GOOGLE_CLIENT_ID in .env (or config auth.oauth.google.client_id)
+OAuthException: OAuth.user() reads the callback request
+https://shop.test/auth/google/callback?code=fake&state=fake google g-7 Fake Person fake@x.test verified=true avatar=null token=fake-token nick=null scopes=#[]
+== teams
+  event: added Sara as admin to Acme
+  event: added Omar as member to Acme
+Ali, Sara, Omar | Sara | Ali | Ali
+owner admin member owner true
+true true false true
+true false true
+ValueException: Team.addMember(): that user owns this team already
+ValueException: Team.addMember(): that user is on this team already (role: admin) — use team.updateMemberRole(user, role)
+ValueException: Team.addMember(): unknown team role "boss" (roles: admin, member — set config auth.teams.roles)
+ValueException: Team.updateMemberRole(): "owner" is not a member role — a team has one owner (its user_id); use team.transferOwnership(user)
+ValueException: Team.removeMember(): the owner cannot leave their team — transferOwnership(user) first, or delete the team with purge()
+TypeException: Team.addMember() has no parameter 'rank' (its parameters: user, role)
+Sara, Omar
+#["Acme", "Beta"] #["Beta"] 1
+Acme true true Beta false
+-- invitations
+zara@x.test member null 40 0 (no accept route: no email)
+#["zara@x.test"] Shop: join the Acme team true true
+1 admin false
+member 1 true false
+Acme null
+false (someone else's invitation)
+  event: added Zara as admin to Acme
+true admin false 0
+ValueException: Team.invite(): sara@x.test is on this team already
+-- ownership and leaving
+  event: added Ali as admin to Acme
+Sara admin Sara, Omar, Zara, Ali
+true false null false
+1 null Acme
+ali@x.test null 30
