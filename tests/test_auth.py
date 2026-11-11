@@ -69,6 +69,8 @@ class AuthScaffold(unittest.TestCase):
         self.assertIn("Kept routes/auth.bq", out)
         self.assertNotIn("Created", out)
         self.assertEqual(self.barq("compile", "app", "config", "database", "routes")[0], 0)
+        code, out, err = self.barq("fmt", "--check", ".")                  # written the way barq fmt writes
+        self.assertEqual(code, 0, out + err)
         os.makedirs(os.path.join(self.dir, "tests"))
         shutil.copy(os.path.join(HERE, "auth_scaffold", "auth_flow_test.bq"), os.path.join(self.dir, "tests"))
         with open(os.path.join(HERE, "auth_scaffold", "expected.out")) as f:

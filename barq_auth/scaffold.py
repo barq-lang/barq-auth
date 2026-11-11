@@ -64,18 +64,18 @@ dict<string, any> auth = #{
 
 ROUTES = '''// Authentication routes, written by barq auth:install. Edit freely.
 // barq serve loads this file before routes/web.bq.
-use App\\Controllers\\Auth\\LoginController
-use App\\Controllers\\Auth\\RegisterController
-use App\\Controllers\\Auth\\LogoutController
 use App\\Controllers\\Auth\\ForgotPasswordController
-use App\\Controllers\\Auth\\ResetPasswordController
-use App\\Controllers\\Auth\\VerifyEmailController
-use App\\Controllers\\Auth\\TwoFactorController
+use App\\Controllers\\Auth\\LoginController
+use App\\Controllers\\Auth\\LogoutController
 use App\\Controllers\\Auth\\OAuthController
+use App\\Controllers\\Auth\\RegisterController
+use App\\Controllers\\Auth\\ResetPasswordController
 use App\\Controllers\\Auth\\SessionController
 use App\\Controllers\\Auth\\TeamController
-use App\\Controllers\\Auth\\TeamMemberController
 use App\\Controllers\\Auth\\TeamInvitationController
+use App\\Controllers\\Auth\\TeamMemberController
+use App\\Controllers\\Auth\\TwoFactorController
+use App\\Controllers\\Auth\\VerifyEmailController
 
 Route.group(#{"middleware": #["csrf"]}, karo(): void
     Route.group(#{"middleware": #["guest"]}, karo(): void
