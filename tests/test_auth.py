@@ -60,7 +60,9 @@ class AuthScaffold(unittest.TestCase):
     def test_generated_pages(self):
         code, out, err = self.barq("auth:install")
         self.assertEqual(code, 0, err)
-        for rel in ("routes/auth.bq", "app/Controllers/Auth/TwoFactorController.bq", "views/auth/login.bq",
+        with open(os.path.join(self.dir, "app/Controllers/Auth/LoginController.bq")) as f:
+            self.assertIn("class LoginController extends Controller\n", f.read())
+        for rel in ("routes/auth.bq", "app/Controllers/Controller.bq", "app/Controllers/Auth/TwoFactorController.bq", "views/auth/login.bq",
                     "views/layouts/auth.bq", "app/Models/User.bq", "config/auth.bq"):
             self.assertTrue(os.path.isfile(os.path.join(self.dir, rel)), rel)
         with open(os.path.join(self.dir, ".env")) as f:

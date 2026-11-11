@@ -16,6 +16,9 @@ def cmd_auth_install(args):
     model = os.path.join("app", "Models", "User.bq")
     had_model = os.path.exists(model)
     files.append((model, sc.USER_MODEL))
+    base = os.path.join("app", "Controllers", "Controller.bq")   # the auth controllers extend it
+    if not os.path.exists(base) and write_new(base, sc.BASE_CONTROLLER):
+        return 1
     for path, text in files:
         if os.path.exists(path):
             print(f"Kept {path} (already there)")

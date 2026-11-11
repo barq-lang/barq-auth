@@ -128,7 +128,9 @@ HOME = 'to_str(Config.get("auth.home", "/dashboard"))'
 
 LOGIN = '''namespace App\\Controllers\\Auth
 
-class LoginController
+use App\\Controllers\\Controller
+
+class LoginController extends Controller
 
     #[Public]
     #[any]
@@ -156,9 +158,10 @@ class LoginController
 
 REGISTER = '''namespace App\\Controllers\\Auth
 
+use App\\Controllers\\Controller
 use App\\Models\\User
 
-class RegisterController
+class RegisterController extends Controller
 
     #[Public]
     #[any]
@@ -185,7 +188,9 @@ class RegisterController
 
 LOGOUT = '''namespace App\\Controllers\\Auth
 
-class LogoutController
+use App\\Controllers\\Controller
+
+class LogoutController extends Controller
 
     #[Public]
     #[any]
@@ -197,7 +202,9 @@ class LogoutController
 
 FORGOT = '''namespace App\\Controllers\\Auth
 
-class ForgotPasswordController
+use App\\Controllers\\Controller
+
+class ForgotPasswordController extends Controller
 
     #[Public]
     #[any]
@@ -216,7 +223,9 @@ class ForgotPasswordController
 
 RESET = '''namespace App\\Controllers\\Auth
 
-class ResetPasswordController
+use App\\Controllers\\Controller
+
+class ResetPasswordController extends Controller
 
     #[Public]
     #[any]
@@ -239,9 +248,10 @@ class ResetPasswordController
 
 VERIFY = '''namespace App\\Controllers\\Auth
 
+use App\\Controllers\\Controller
 use App\\Models\\User
 
-class VerifyEmailController
+class VerifyEmailController extends Controller
 
     #[Public]
     #[any]
@@ -272,9 +282,10 @@ class VerifyEmailController
 
 TWO_FACTOR = '''namespace App\\Controllers\\Auth
 
+use App\\Controllers\\Controller
 use App\\Models\\User
 
-class TwoFactorController
+class TwoFactorController extends Controller
 
     // ---- the login challenge (after email + password were right) ----
 
@@ -342,10 +353,11 @@ class TwoFactorController
 
 OAUTH = '''namespace App\\Controllers\\Auth
 
+use App\\Controllers\\Controller
 use App\\Models\\User
 
 // Social login. A user is found by <provider>_id, then by a verified email; otherwise one is created.
-class OAuthController
+class OAuthController extends Controller
 
     #[Public]
     #[any]
@@ -389,8 +401,10 @@ class OAuthController
 
 SESSIONS = '''namespace App\\Controllers\\Auth
 
+use App\\Controllers\\Controller
+
 // The devices a user is logged in on, and logging them out.
-class SessionController
+class SessionController extends Controller
 
     #[Public]
     #[any]
@@ -429,10 +443,11 @@ class SessionController
 
 TEAMS = '''namespace App\\Controllers\\Auth
 
+use App\\Controllers\\Controller
 use App\\Models\\Team
 use App\\Models\\User
 
-class TeamController
+class TeamController extends Controller
 
     #[Public]
     #[any]
@@ -488,10 +503,11 @@ class TeamController
 
 TEAM_MEMBERS = '''namespace App\\Controllers\\Auth
 
+use App\\Controllers\\Controller
 use App\\Models\\Team
 use App\\Models\\User
 
-class TeamMemberController
+class TeamMemberController extends Controller
 
     // Invite someone by email (they join when they open the link and log in with that address).
     #[Public]
@@ -535,9 +551,10 @@ class TeamMemberController
 
 TEAM_INVITATIONS = '''namespace App\\Controllers\\Auth
 
+use App\\Controllers\\Controller
 use App\\Models\\Team
 
-class TeamInvitationController
+class TeamInvitationController extends Controller
 
     // The link in the invitation email. Guests log in first and come back here.
     #[Public]
@@ -1166,6 +1183,14 @@ TEAM_INVITATIONS_MIGRATION = create_table("CreateTeamInvitationsTable", "team_in
 SESSIONS_MIGRATION = create_table("CreateSessionsTable", "sessions", [
     'table.string("id").primary()', 'table.int("user_id").nullable().index()', 'table.string("ip_address", 45).nullable()',
     'table.text("user_agent").nullable()', 'table.text("payload")', 'table.int("last_activity").index()'])
+
+# app/Controllers/Controller.bq — barq new writes it; auth:install adds it to older projects
+BASE_CONTROLLER = '''namespace App\\Controllers
+
+// The base class of every controller: put the helpers they share here.
+// Controllers in a subfolder bring it in with: use App\\Controllers\\Controller
+abstract class Controller
+'''
 
 CONTROLLERS = {
     "LoginController": LOGIN,
