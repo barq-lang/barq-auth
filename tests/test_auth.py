@@ -153,5 +153,34 @@ class AuthInProject(unittest.TestCase):
                 os.remove(os.path.join(self.dir, "storage", "app", "ticks.log"))
 
 
+class NewWithAuth(unittest.TestCase):
+    """barq new --auth: the framework's files plus auth:install, which owns the User model and users table."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="barq-new-")
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_new_with_auth(self):
+        code, out, err = devtest.barq_cli("new", "site", "--auth", cwd=self.dir, timeout=120)
+        self.assertEqual(code, 0, err)
+        app = os.path.join(self.dir, "site")
+        self.assertNotIn("Kept", out)
+        with open(os.path.join(app, "app", "Models", "User.bq")) as f:
+            self.assertIn("two_factor_secret", f.read())
+        self.assertEqual(len(glob.glob(os.path.join(app, "database", "migrations", "*_users_table.bq"))), 1)
+        with open(os.path.join(app, ".env")) as f:
+            self.assertEqual(f.read().count("APP_KEY="), 1)
+        self.assertEqual(devtest.barq_cli("check", ".", cwd=app)[0], 0)
+        code, out, err = devtest.barq_cli("migrate:fresh", "--seed", cwd=app, timeout=120)
+        self.assertEqual(code, 0, out + err)
+        code, out, err = devtest.barq_cli("test", cwd=app, timeout=120)
+        self.assertEqual(code, 0, out + err)
+        code, out, _ = devtest.barq_cli("route:list", cwd=app)
+        self.assertIn("login", out)
+        self.assertIn("home", out)
+
+
 if __name__ == "__main__":
     unittest.main()
