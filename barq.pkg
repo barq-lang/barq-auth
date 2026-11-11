@@ -1,0 +1,10 @@
+// Read by barq install (barq 0.21+): barq install barq-lang/barq-auth
+name        = "barq-auth"
+version     = "0.21.0-alpha"
+description = "Login, registration, API tokens, 2FA, OAuth, teams and auth:install for Barq"
+author      = "barq-lang"
+license     = "MIT"
+requires    = #{
+    "barq": ">=0.20.0-alpha",
+    "barq-lang/barq-framework": "^0.21.0-alpha"
+}

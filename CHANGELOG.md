@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.21.0-alpha — 2026-11-11
+
+- A `barq.pkg` manifest, so barq 0.21's package manager can install it into a project: `barq install barq-lang/barq-auth` (and barq-framework with it).
+
 ## 0.20.0-alpha — 2026-11-11
 
 - `barq new my-app --auth` (barq 0.20.0) runs `auth:install` in the new project, so it starts with login, registration and the rest.

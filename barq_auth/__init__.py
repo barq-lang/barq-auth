@@ -7,7 +7,7 @@ Needs barq-framework.
 """
 
 NAME = "barq-auth"
-__version__ = "0.20.0-alpha"
+__version__ = "0.21.0-alpha"
 REQUIRES = ["barq_framework"]
 
 USAGE = """
